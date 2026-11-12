@@ -48,6 +48,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _refreshTimer;
   StreamSubscription<TimingProfile>? _deepLinkSub;
   StreamSubscription<Map<String, dynamic>>? _timetableDeepLinkSub;
+  Timer? _timezoneRetryTimer;
   PeriodStatus? _previousActiveStatus;
   late PageController _pageController;
   bool _permissionsMissing = false;
@@ -201,14 +202,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _deepLinkSub?.cancel();
     _timetableDeepLinkSub?.cancel();
     _refreshTimer?.cancel();
+    _timezoneRetryTimer?.cancel();
     _pageController.dispose();
     super.dispose();
+  }
+
+  void _scheduleTimezoneCheck({int attempt = 0}) {
+    _timezoneRetryTimer?.cancel();
+    NotificationService.ensureTimezoneCurrent().then((ok) {
+      if (!ok && mounted && attempt < 5) {
+        _timezoneRetryTimer = Timer(Duration(seconds: (attempt + 1) * 3), () {
+          if (mounted) {
+            _scheduleTimezoneCheck(attempt: attempt + 1);
+          }
+        });
+      }
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _checkPermissions();
+      _scheduleTimezoneCheck();
       setState(() {});
       _checkClipboardForProfile();
       DeepLinkService.checkInitialLink();
@@ -447,12 +463,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _scheduleNotificationsForToday() async {
     try {
-      await NotificationService.scheduleAll(_timetable);
+      final ok = await NotificationService.scheduleAll(_timetable);
+      if (!ok && mounted) {
+        AppFeedback.showError(
+          context,
+          'Some class notifications could not be scheduled. Check timetable entries and permissions.',
+        );
+      }
     } catch (_) {
       if (mounted) {
         AppFeedback.showError(
           context,
-          'Notifications could not be scheduled. Verify permissions in Settings.',
+          'Some class notifications could not be scheduled. Check timetable entries and permissions.',
         );
       }
     }

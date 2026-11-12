@@ -64,7 +64,7 @@ ignored
           'Automatic notification clear',
           'Fast widget loading',
         ],
-        htmlUrl: 'https://github.com/Dariokisumo/Jadwal/releases',
+        htmlUrl: 'https://github.com/leyolsy/Jadwal/releases',
         arm64Url: 'https://github.com/test/arm64.apk',
         arm32Url: 'https://github.com/test/arm32.apk',
         isNewer: true,

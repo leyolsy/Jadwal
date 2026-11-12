@@ -12,6 +12,7 @@ import '../constants/timetable_prompt.dart';
 import '../constants/weekday_map.dart';
 import '../models/period_model.dart';
 import '../theme/primitives.dart';
+import 'storage_service.dart';
 
 /// Maps day keys to Dart [DateTime] weekday constants.
 /// Derived from the inverse in [kWeekdayMap] (DateTime weekday -> day key).
@@ -23,22 +24,35 @@ final Map<String, int> _weekdayMap = {
 /// app's local timezone that is strictly after [now]. If that exact moment
 /// has already passed (or is today but earlier), advances to the following
 /// week so the alarm is never scheduled in the past.
+///
+/// Uses calendar arithmetic (now.day + daysAhead) to remain DST-safe
+/// and preserve the exact scheduled hour and minute.
 tz.TZDateTime _nextWeeklyOccurrence(
   int weekday,
   int hour,
   int minute,
   tz.TZDateTime now,
 ) {
-  var date =
-      tz.TZDateTime(now.location, now.year, now.month, now.day, hour, minute);
   final daysAhead = (weekday - now.weekday) % 7;
-  if (daysAhead > 0) {
-    date = date.add(Duration(days: daysAhead));
+  var targetDate = tz.TZDateTime(
+    now.location,
+    now.year,
+    now.month,
+    now.day + daysAhead,
+    hour,
+    minute,
+  );
+  if (!targetDate.isAfter(now)) {
+    targetDate = tz.TZDateTime(
+      now.location,
+      targetDate.year,
+      targetDate.month,
+      targetDate.day + 7,
+      hour,
+      minute,
+    );
   }
-  if (!date.isAfter(now)) {
-    date = date.add(const Duration(days: 7));
-  }
-  return date;
+  return targetDate;
 }
 
 class NotificationService {
@@ -49,20 +63,222 @@ class NotificationService {
   static const _channel = MethodChannel('com.jadwal/exact_alarm');
 
   static bool _initialized = false;
+  static bool _timezoneInitialized = false;
+  static bool _pendingTimezoneReschedule = false;
+  static Future<bool> _scheduleQueue = Future.value(true);
+  static int? _lastKnownOffsetMs;
+  static String? _lastKnownTzId;
+
+  /// Known legacy aliases mapped to standard IANA timezone database names.
+  /// Only contains unambiguous geographic renames, excluding ambiguous abbreviations.
+  static const Map<String, String> _timezoneAliases = {
+    'Asia/Calcutta': 'Asia/Kolkata',
+    'Asia/Saigon': 'Asia/Ho_Chi_Minh',
+    'Asia/Katmandu': 'Asia/Kathmandu',
+    'Asia/Rangoon': 'Asia/Yangon',
+    'Asia/Ulan_Bator': 'Asia/Ulaanbaatar',
+    'Asia/Macao': 'Asia/Macau',
+    'US/Eastern': 'America/New_York',
+    'US/Central': 'America/Chicago',
+    'US/Mountain': 'America/Denver',
+    'US/Pacific': 'America/Los_Angeles',
+    'US/Alaska': 'America/Anchorage',
+    'US/Hawaii': 'Pacific/Honolulu',
+    'Canada/Eastern': 'America/Toronto',
+    'Canada/Central': 'America/Winnipeg',
+    'Canada/Mountain': 'America/Edmonton',
+    'Canada/Pacific': 'America/Vancouver',
+    'Europe/Belfast': 'Europe/London',
+    'UTC': 'UTC',
+    'GMT': 'UTC',
+  };
+
+  /// Resolves the device's timezone into a valid [tz.Location].
+  ///
+  /// Never defaults blindly to UTC when the device has a non-UTC offset.
+  /// If the platform identifier is missing, invalid, or an unmapped OEM string
+  /// (e.g. 'Asia/Calcutta'), maps verified aliases or matches a rule-bearing
+  /// location in the database preserving Daylight Saving Time behavior.
+  static tz.Location _resolveLocation(String? identifier) {
+    final expectedOffsetMs = DateTime.now().timeZoneOffset.inMilliseconds;
+
+    if (identifier != null && identifier.trim().isNotEmpty) {
+      final trimmed = identifier.trim();
+      try {
+        final loc = tz.getLocation(trimmed);
+        if (loc.currentTimeZone.offset == expectedOffsetMs) {
+          return loc;
+        }
+      } catch (_) {}
+
+      final alias = _timezoneAliases[trimmed];
+      if (alias != null) {
+        try {
+          final loc = tz.getLocation(alias);
+          if (loc.currentTimeZone.offset == expectedOffsetMs) {
+            return loc;
+          }
+        } catch (_) {}
+      }
+    }
+
+    return _fallbackLocationByOffset();
+  }
+
+  /// Creates an explicit fixed-offset [tz.Location] matching the device's clock.
+  /// Uses a standard GMT±HH:MM identifier compatible with both Dart and
+  /// Java's [ZoneId.of] on Android, avoiding incorrect DST rule inheritance.
+  static tz.Location _createFixedOffsetLocation(int offsetMilliseconds) {
+    const minTime = -8640000000000000;
+    final totalMinutes = offsetMilliseconds ~/ 60000;
+    final sign = totalMinutes >= 0 ? '+' : '-';
+    final absMinutes = totalMinutes.abs();
+    final hours = (absMinutes ~/ 60).toString().padLeft(2, '0');
+    final minutes = (absMinutes % 60).toString().padLeft(2, '0');
+    final name = 'GMT$sign$hours:$minutes';
+
+    return tz.Location(
+      name,
+      [minTime],
+      [0],
+      [tz.TimeZone(offsetMilliseconds, isDst: false, abbreviation: name)],
+    );
+  }
+
+  /// Fallback when native identifier lookup fails or is unmapped.
+  /// Samples all 12 months across the year to capture any seasonal transitions (e.g. DST
+  /// or Ramadan adjustments). If seasonal shifts exist, searches the timezone database
+  /// for a matching rule-bearing location so recurring weekly alarms preserve transition
+  /// rules. If the device has no seasonal shifts, constructs a stable fixed-offset location.
+  static tz.Location _fallbackLocationByOffset() {
+    try {
+      final now = DateTime.now();
+      final monthlyOffsets = List.generate(
+        12,
+        (m) => DateTime(now.year, m + 1, 15).timeZoneOffset.inMilliseconds,
+      );
+      final bool hasTransitions =
+          monthlyOffsets.any((o) => o != monthlyOffsets.first);
+
+      if (hasTransitions) {
+        for (final loc in tz.timeZoneDatabase.locations.values) {
+          try {
+            bool matchesAllMonths = true;
+            for (var m = 0; m < 12; m++) {
+              final sampleDate = DateTime(now.year, m + 1, 15);
+              if (tz.TZDateTime.from(sampleDate, loc).timeZoneOffset.inMilliseconds !=
+                  monthlyOffsets[m]) {
+                matchesAllMonths = false;
+                break;
+              }
+            }
+            if (matchesAllMonths) {
+              return loc;
+            }
+          } catch (_) {}
+        }
+      }
+
+      final offsetMs = now.timeZoneOffset.inMilliseconds;
+      return _createFixedOffsetLocation(offsetMs);
+    } catch (_) {
+      return tz.local;
+    }
+  }
+
+  /// Fetches and normalizes the native device timezone identifier.
+  /// First queries [FlutterTimezone.getLocalTimezone], falling back to the
+  /// platform channel method 'getTimeZoneId', returning null if empty or unavailable.
+  static Future<String?> _fetchNativeTimezoneId() async {
+    String? id;
+    try {
+      final tzInfo = await FlutterTimezone.getLocalTimezone();
+      id = tzInfo.identifier.trim();
+    } catch (_) {}
+    if (id == null || id.isEmpty) {
+      try {
+        final platformId = await _channel.invokeMethod<String>('getTimeZoneId');
+        id = platformId?.trim();
+      } catch (_) {}
+    }
+    return (id != null && id.isNotEmpty) ? id : null;
+  }
+
+  /// Initializes or refreshes the timezone location.
+  /// If native timezone lookup fails, falls back to the native platform channel,
+  /// or a device-offset location, and updates [_lastKnownOffsetMs] and [_lastKnownTzId].
+  static Future<void> _initTimezone() async {
+    tz_data.initializeTimeZones();
+    final currentId = await _fetchNativeTimezoneId();
+
+    try {
+      tz.setLocalLocation(_resolveLocation(currentId));
+    } catch (e) {
+      debugPrint(
+          'NotificationService: timezone lookup failed ($e), falling back to clock offset');
+      tz.setLocalLocation(_fallbackLocationByOffset());
+    }
+    _lastKnownTzId = currentId;
+    _lastKnownOffsetMs = DateTime.now().timeZoneOffset.inMilliseconds;
+    _timezoneInitialized = true;
+  }
+
+  /// Checks whether the device's clock offset or timezone identifier changed since initialization.
+  /// If changed, re-resolves the timezone and reschedules reminders so they remain accurate
+  /// across daylight-saving transitions and timezone changes.
+  ///
+  /// Returns true if the timezone is current and scheduling succeeded or was not needed.
+  /// Returns false if rescheduling failed, retaining the pending state for retry.
+  static Future<bool> ensureTimezoneCurrent({bool rescheduleOnChange = true}) async {
+    final currentOffsetMs = DateTime.now().timeZoneOffset.inMilliseconds;
+    final currentId = await _fetchNativeTimezoneId();
+
+    if (!_timezoneInitialized) {
+      await _initTimezone();
+      return true;
+    }
+
+    final bool offsetChanged = _lastKnownOffsetMs != currentOffsetMs;
+    final bool idChanged = _lastKnownTzId != currentId;
+
+    if (offsetChanged || idChanged) {
+      await _initTimezone();
+      _pendingTimezoneReschedule = true;
+    }
+
+    if (_pendingTimezoneReschedule && rescheduleOnChange) {
+      _scheduleQueue = _scheduleQueue.then((_) async {
+        if (!_pendingTimezoneReschedule) return true;
+        try {
+          // Re-fetch current active timetable at execution time so an in-flight
+          // import or switch is never overwritten with an older timetable snapshot.
+          final timetableData = await StorageService.loadTimetable();
+          if (timetableData != null) {
+            final rawTimetable = timetableData['timetable'];
+            if (rawTimetable is Map) {
+              return await _doScheduleAll(rawTimetable.cast<String, dynamic>());
+            }
+          }
+          _pendingTimezoneReschedule = false;
+          return true;
+        } catch (e) {
+          debugPrint(
+              'NotificationService.ensureTimezoneCurrent reschedule failed: $e');
+          return false;
+        }
+      }, onError: (_) => false);
+      return await _scheduleQueue;
+    }
+
+    return !_pendingTimezoneReschedule;
+  }
 
   /// Must be called once before any other method, ideally in main()
   /// before runApp().
   static Future<void> init() async {
     if (_initialized) return;
 
-    tz_data.initializeTimeZones();
-    try {
-      final TimezoneInfo tzInfo = await FlutterTimezone.getLocalTimezone();
-      tz.setLocalLocation(tz.getLocation(tzInfo.identifier));
-    } catch (_) {
-      // Fallback if native timezone fetch fails
-      tz.setLocalLocation(tz.local);
-    }
+    await _initTimezone();
 
     const androidSettings = AndroidInitializationSettings('ic_notification');
     const iosSettings = DarwinInitializationSettings();
@@ -244,14 +460,32 @@ class NotificationService {
   /// via the [ScheduledNotificationBootReceiver] already declared in the
   /// Android manifest.
   ///
-  /// Safe to call repeatedly — cancels all previous notifications first.
-  static Future<void> scheduleAll(Map<String, dynamic> timetable) async {
-    if (!_initialized) await init();
+  /// Safe to call repeatedly — schedules are serialized sequentially and cancel
+  /// all previous notifications first. Returns true if all alarms registered successfully.
+  static Future<bool> scheduleAll(Map<String, dynamic> timetable) {
+    _scheduleQueue = _scheduleQueue.then(
+      (_) => _doScheduleAll(timetable),
+      onError: (_) => _doScheduleAll(timetable),
+    );
+    return _scheduleQueue;
+  }
 
+  static Future<bool> _doScheduleAll(Map<String, dynamic> timetable) async {
+    if (!_initialized) {
+      await init();
+    } else {
+      await ensureTimezoneCurrent(rescheduleOnChange: false);
+    }
+
+    final startTzId = _lastKnownTzId;
+    final startOffset = _lastKnownOffsetMs;
+
+    bool allSucceeded = true;
     try {
       await _plugin.cancelAll();
     } catch (e) {
-      debugPrint('NotificationService.scheduleAll: cancelAll failed: $e');
+      allSucceeded = false;
+      debugPrint('NotificationService._doScheduleAll: cancelAll failed: $e');
     }
 
     const androidDetails = AndroidNotificationDetails(
@@ -290,16 +524,26 @@ class NotificationService {
       if (weekday == null) continue;
 
       for (final entry in dayList) {
-        final period = Period.fromJson(entry as Map<String, dynamic>);
+        if (entry is! Map) {
+          allSucceeded = false;
+          continue;
+        }
+        final period = Period.fromJson(Map<String, dynamic>.from(entry));
         final start = period.startTime;
-        if (start == null) continue;
+        if (start == null) {
+          allSucceeded = false;
+          continue;
+        }
 
         // Compute the first upcoming occurrence of this period's 5-min-before
         // time on the *target* weekday (not today's), so each reminder fires
         // on the correct day of the week.
         final reminder = start.subtract(const Duration(minutes: 5));
+        final targetWeekday = (start.hour == 0 && start.minute < 5)
+            ? (weekday == 1 ? 7 : weekday - 1)
+            : weekday;
         final scheduledDate = _nextWeeklyOccurrence(
-          weekday,
+          targetWeekday,
           reminder.hour,
           reminder.minute,
           now,
@@ -316,6 +560,7 @@ class NotificationService {
             ? 'Starts at ${period.start} in $room'
             : 'Starts at ${period.start}';
 
+        bool registered = false;
         try {
           await _plugin.zonedSchedule(
             notifId,
@@ -328,6 +573,7 @@ class NotificationService {
                 UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
           );
+          registered = true;
         } catch (e) {
           // If exact alarm mode threw SecurityException (Android 14+), retry once with inexact
           if (scheduleMode != AndroidScheduleMode.inexactAllowWhileIdle) {
@@ -343,15 +589,23 @@ class NotificationService {
                     UILocalNotificationDateInterpretation.absoluteTime,
                 matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
               );
-              continue;
+              registered = true;
             } catch (_) {}
           }
-          debugPrint(
-              'NotificationService.scheduleAll: zonedSchedule for $dayKey period ${period.periodNumber} failed: $e');
-          continue;
+          if (!registered) {
+            allSucceeded = false;
+            debugPrint(
+                'NotificationService._doScheduleAll: zonedSchedule for $dayKey period ${period.periodNumber} failed: $e');
+          }
         }
       }
     }
+    if (allSucceeded &&
+        _lastKnownTzId == startTzId &&
+        _lastKnownOffsetMs == startOffset) {
+      _pendingTimezoneReschedule = false;
+    }
+    return allSucceeded;
   }
 
   /// Sends an immediate test notification to verify sound, icon, and delivery.

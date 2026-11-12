@@ -3,6 +3,7 @@
 
     <!-- Required for local notifications to fire reliably at exact times. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <!-- Required to ask the user to exempt Jadwal from battery optimization.
          On OEM skins like OnePlus/OxygenOS, even with SCHEDULE_EXACT_ALARM

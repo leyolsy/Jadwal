@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import os
 import subprocess
@@ -23,20 +24,24 @@ def get_token():
 
 def main():
     token = get_token()
-    owner = "Dariokisumo"
+    owner = "leyolsy"
     repo = "Jadwal"
-    tag = "v2.10.7"
-    release_name = "v2.10.7 — UI Clutter Reduction & Setup Flow Refinement"
-    release_body = """## What's new in v2.10.7
+    tag = "v2.10.8"
+    release_name = "v2.10.8 — Exact Alarms, Resilient Timezones & Robust Notification Delivery"
+    release_body = """## What's new in v2.10.8
 
-### 🧭 Streamlined Setup Screen & Progressive Disclosure
-- **Step 1 Accordion Collapse**: When Step 2 activates, Step 1 now automatically collapses into a sleek 52px summary chip with a "Change" action, keeping the primary "Import This Schedule" button in immediate focus above the fold.
-- **Removed Static Prompt Banner**: Eliminated the redundant permanent in-card prompt copy banner. Transient feedback is now handled cleanly by floating snackbars and button state swaps.
-- **Consolidated Entry Points**: Streamlined Step 1 to keep focus on AI assistant selection and photo alignment while retaining quick access to file uploads and demo schedules.
+### ⏰ Exact Alarms & Background Reliability
+- **Added `USE_EXACT_ALARM` Permission**: Declared `android.permission.USE_EXACT_ALARM` in `AndroidManifest.xml` to prevent Android Doze mode and aggressive OEM battery savers from deferring daytime class notifications and batch-dumping them at night.
+- **Race Condition Prevention**: Notification scheduling is now strictly serialized via a dedicated asynchronous queue (`_scheduleQueue`), ensuring concurrent timetable imports and app-resume events do not cancel or corrupt active alarms.
 
-### 🔔 Singleton Transient Notifications & Dismissible Errors
-- **Purged Notification Queue**: Upgraded notification dispatch in `AppFeedback` to immediately clear pending snackbars so rapid taps no longer stack lingering banners.
-- **Dismissible Error Box**: Added an interactive dismiss action to error alerts in Step 2, and ensured error states clear automatically upon valid timetable entry.
+### 🌐 Resilient Timezone Resolution
+- **Native Android Timezone Fallback**: Implemented a platform channel method `getTimeZoneId` in `MainActivity.kt` providing direct access to `java.util.TimeZone.getDefault().id` when standard platform lookup fails.
+- **Geographic Timezone Aliasing**: Added canonical geographic timezone mappings (e.g. `Asia/Calcutta` → `Asia/Kolkata`, `US/Eastern` → `America/New_York`) to reliably resolve device timezone identifiers.
+- **12-Month DST & Offset Matching**: Timezone offset matching now samples 12 months across the year to properly identify regions with seasonal shifts without defaulting to UTC.
+
+### ⏱️ Flexible Period Time Parsing
+- **Extended Time Formats**: Expanded period time parsing to seamlessly accept `h:mm AM/PM`, `h:mmAM/PM` (no space), lowercase `am/pm`, and standard 24-hour formats (`14:00`).
+- **Clean Notification Error Feedback**: Gracefully handles malformed timetable entries and invalid period times without generating false system permission warnings.
 
 ---
 
@@ -44,8 +49,9 @@ def main():
 
 | File | Architecture | Target Devices | Size | SHA256 |
 |---|---|---|---|---|
-| `jadwal-v2.10.7-66-release.apk` | **arm64-v8a** (64-bit) | Modern Android phones & tablets (recommended) | 24.33 MB | `7889854958369941752050812e6bfe180bbf79e6d36771f54f5a5487a77ab581` |
-| `jadwal-v2.10.7-66-arm32-release.apk` | **armeabi-v7a** (32-bit) | Older & budget 32-bit Android devices | 21.99 MB | `f6560bbaf336b0003d2e3ac82f657f65f1f5ce998a2c005d16fe0111775781b3` |
+| `jadwal-v2.10.8-67-release.apk` | **arm64-v8a** (64-bit) | Modern Android phones & tablets (recommended) | 24.33 MB | `065c90bc41cd07ae5038fafbf3681755fa043b6ce609e148cb9c7adf95445914` |
+
+> *Note: For older 32-bit devices, download `jadwal-v2.10.7-66-arm32-release.apk` from the [v2.10.7 release assets](https://github.com/leyolsy/Jadwal/releases/tag/v2.10.7).*
 """
 
     headers = {
@@ -86,8 +92,7 @@ def main():
 
     # Assets to upload
     assets = [
-        ("Apk files/jadwal-v2.10.7-66-release.apk", "jadwal-v2.10.7-66-release.apk"),
-        ("Apk files/apk32/jadwal-v2.10.7-66-release.apk", "jadwal-v2.10.7-66-arm32-release.apk")
+        ("Apk files/jadwal-v2.10.8-67-release.apk", "jadwal-v2.10.8-67-release.apk"),
     ]
 
     for local_path, asset_name in assets:
@@ -100,6 +105,47 @@ def main():
         
         with open(local_path, "rb") as f:
             file_data = f.read()
+
+        # If asset already exists on this release, verify size and digest before skipping duplicate upload
+        existing_assets = data.get("assets", [])
+        matched_existing = None
+        for ea in existing_assets:
+            if ea.get("name") == asset_name:
+                matched_existing = ea
+                break
+
+        if matched_existing:
+            local_sha256 = hashlib.sha256(file_data).hexdigest().lower()
+            existing_digest = (matched_existing.get("digest") or "").lower()
+            published_body = (data.get("body") or "").lower()
+
+            if existing_digest:
+                if not existing_digest.endswith(local_sha256):
+                    print(f"Error: Asset {asset_name} digest ({existing_digest}) differs from local SHA-256 ({local_sha256})! Refusing mismatched replacement.")
+                    sys.exit(1)
+            else:
+                download_url = matched_existing.get("browser_download_url")
+                if download_url:
+                    try:
+                        dl_req = urllib.request.Request(download_url, headers={"User-Agent": "Jadwal-Release-Script"})
+                        with urllib.request.urlopen(dl_req) as dl_resp:
+                            dl_sha256 = hashlib.sha256(dl_resp.read()).hexdigest().lower()
+                        if dl_sha256 != local_sha256:
+                            print(f"Error: Downloaded asset {asset_name} SHA-256 ({dl_sha256}) differs from local ({local_sha256})! Refusing mismatched replacement.")
+                            sys.exit(1)
+                    except Exception as dl_err:
+                        print(f"Error: Could not verify existing asset {asset_name} without digest: {dl_err}")
+                        sys.exit(1)
+
+            if matched_existing.get("size") != file_size:
+                print(f"Error: Asset {asset_name} size ({matched_existing.get('size')} bytes) differs from local file ({file_size} bytes)! Refusing mismatched replacement.")
+                sys.exit(1)
+            elif local_sha256 not in published_body:
+                print(f"Error: Local SHA-256 ({local_sha256}) for {asset_name} is not recorded in the published release body! Refusing mismatched replacement.")
+                sys.exit(1)
+            else:
+                print(f"Asset {asset_name} is already attached to release with matching digest and size ({file_size} bytes), skipping duplicate upload.")
+                continue
 
         upload_headers = {
             "Authorization": f"token {token}",

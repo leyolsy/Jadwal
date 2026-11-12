@@ -138,6 +138,9 @@ class MainActivity: FlutterActivity() {
                 "getAppVersion" -> {
                     result.success(getAppVersion())
                 }
+                "getTimeZoneId" -> {
+                    result.success(java.util.TimeZone.getDefault().id)
+                }
                 "getInitialDeepLink" -> {
                     val link = pendingDeepLink
                     pendingDeepLink = null

@@ -45,7 +45,7 @@ class AppReleaseInfo {
 /// Lightweight, offline-resilient GitHub release update checker.
 class UpdateService {
   static const String _releasesApiUrl =
-      'https://api.github.com/repos/Dariokisumo/Jadwal/releases/latest';
+      'https://api.github.com/repos/leyolsy/Jadwal/releases/latest';
   static const String _lastCheckKey = 'last_github_update_check_time';
   static const Duration _checkCooldown = Duration(hours: 24);
 
@@ -89,7 +89,7 @@ class UpdateService {
       final releaseName = (data['name'] as String? ?? tagName).trim();
       final rawBody = data['body'] as String? ?? '';
       final htmlUrl = data['html_url'] as String? ??
-          'https://github.com/Dariokisumo/Jadwal/releases';
+          'https://github.com/leyolsy/Jadwal/releases';
 
       // Parse asset download links
       String? arm64Url;

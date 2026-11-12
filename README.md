@@ -8,10 +8,10 @@
 
 **An offline, glanceable timetable companion for teachers.**
 
-[![Latest Release](https://img.shields.io/github/v/release/Dariokisumo/Jadwal?style=flat-square&color=D4930D&labelColor=1A1612&label=release)](https://github.com/Dariokisumo/Jadwal/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/leyolsy/Jadwal?style=flat-square&color=D4930D&labelColor=1A1612&label=release)](https://github.com/leyolsy/Jadwal/releases/latest)
 [![Live Web App](https://img.shields.io/badge/web_companion-getjadwal.surge.sh-D4930D?style=flat-square&labelColor=1A1612)](https://getjadwal.surge.sh)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-D4930D?style=flat-square&labelColor=1A1612)](LICENSE)
-[![Platform: Android](https://img.shields.io/badge/platform-Android_10+-D4930D?style=flat-square&labelColor=1A1612)](https://github.com/Dariokisumo/Jadwal/releases)
+[![Platform: Android](https://img.shields.io/badge/platform-Android_10+-D4930D?style=flat-square&labelColor=1A1612)](https://github.com/leyolsy/Jadwal/releases)
 [![Privacy: 100% Offline](https://img.shields.io/badge/privacy-100%25_offline-D4930D?style=flat-square&labelColor=1A1612)](#privacy--permission-transparency)
 [![Framework: Flutter](https://img.shields.io/badge/framework-Flutter_3.44-D4930D?style=flat-square&labelColor=1A1612)](https://flutter.dev)
 
@@ -27,11 +27,11 @@ Pre-compiled, signed APK binaries are published with every release. Jadwal requi
 
 | Binary | Target Architecture | Devices | Size | SHA-256 |
 |:---|:---|:---|---:|:---|
-| [`jadwal-v2.10.3-62-release.apk`](https://github.com/Dariokisumo/Jadwal/releases/download/v2.10.3/jadwal-v2.10.3-62-release.apk) | **arm64-v8a** (64-bit) | Modern Android phones & tablets *(Recommended)* | ~24.2 MB | `a857cc...fd9f` |
-| [`jadwal-v2.10.3-62-arm32-release.apk`](https://github.com/Dariokisumo/Jadwal/releases/download/v2.10.3/jadwal-v2.10.3-62-arm32-release.apk) | **armeabi-v7a** (32-bit) | Budget & legacy school hardware | ~21.8 MB | `ac234f...c680` |
+| [`jadwal-v2.10.8-67-release.apk`](https://github.com/leyolsy/Jadwal/releases/download/v2.10.8/jadwal-v2.10.8-67-release.apk) | **arm64-v8a** (64-bit) | Modern Android phones & tablets *(Recommended)* | 24.33 MB | `065c90...5914` |
+| [`jadwal-v2.10.7-66-arm32-release.apk`](https://github.com/leyolsy/Jadwal/releases/download/v2.10.7/jadwal-v2.10.7-66-arm32-release.apk) | **armeabi-v7a** (32-bit) | Budget & legacy school hardware | 21.99 MB | `f6560b...81b3` |
 
 > [!TIP]
-> Download the **arm64-v8a** version for virtually all devices manufactured after 2017. Verify complete release notes and checksums on the [Releases page](https://github.com/Dariokisumo/Jadwal/releases/latest).
+> Download the **arm64-v8a** version for virtually all devices manufactured after 2017. Verify complete release notes and checksums on the [Releases page](https://github.com/leyolsy/Jadwal/releases/latest).
 > 
 > Want to preview or share timetables directly in a browser without installing the app? Open the web companion at [**getjadwal.surge.sh**](https://getjadwal.surge.sh).
 
@@ -166,7 +166,7 @@ lib/
 Clone the repository and install dependencies:
 
 ```bash
-git clone https://github.com/Dariokisumo/Jadwal.git
+git clone https://github.com/leyolsy/Jadwal.git
 cd Jadwal
 flutter pub get
 ```

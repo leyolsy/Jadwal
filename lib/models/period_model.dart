@@ -1,4 +1,4 @@
-import 'package:intl/intl.dart';
+import 'timing_profile.dart';
 
 /// Status of a period relative to the current moment.
 enum PeriodStatus { upcoming, active, finished }
@@ -38,18 +38,14 @@ class Period {
         'end': end,
       };
 
-  /// Parses a "h:mm a" string (e.g. "2:00 PM") into today's DateTime.
-  /// Returns null if parsing fails rather than throwing, so a single
-  /// malformed entry never crashes the whole list.
+  /// Parses a time string (12-hour or 24-hour) into today's DateTime.
+  /// Delegates to [TimingProfile.parseTimeToMinutes] to support all standard
+  /// variations ("2:00 PM", "2:00PM", "14:00", etc.) gracefully without crashing.
   static DateTime? _parseTimeToday(String timeStr) {
-    try {
-      final now = DateTime.now();
-      final format = DateFormat('h:mm a');
-      final parsed = format.parse(timeStr.trim());
-      return DateTime(now.year, now.month, now.day, parsed.hour, parsed.minute);
-    } catch (_) {
-      return null;
-    }
+    final mins = TimingProfile.parseTimeToMinutes(timeStr);
+    if (mins == null) return null;
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, mins ~/ 60, mins % 60);
   }
 
   DateTime? get startTime => _parseTimeToday(start);
